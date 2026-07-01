@@ -1,0 +1,68 @@
+======================================================================
+  Sliding-Window Viterbi (Real-Time MLSE)
+======================================================================
+
+Channel: h = [0.8+0.j 0.5+0.j 0.3+0.j]
+Channel memory L: 3
+Decision depth D = 5L = 15
+Total symbols: 100
+SNR: 8 dB
+
+The system has a fixed latency of D = 15 symbol periods.
+Symbol at time t is output at time t + D + L - 2.
+
+----------------------------------------------------------------------
+  Real-time processing log (first 20 outputs)
+----------------------------------------------------------------------
+  t= 16: output bit[ 0] = 0 (true=0) OK
+  t= 17: output bit[ 1] = 1 (true=1) OK
+  t= 18: output bit[ 2] = 0 (true=0) OK
+  t= 19: output bit[ 3] = 0 (true=0) OK
+  t= 20: output bit[ 4] = 0 (true=0) OK
+  t= 21: output bit[ 5] = 1 (true=1) OK
+  t= 22: output bit[ 6] = 0 (true=0) OK
+  t= 23: output bit[ 7] = 0 (true=0) OK
+  t= 24: output bit[ 8] = 0 (true=0) OK
+  t= 25: output bit[ 9] = 1 (true=1) OK
+  t= 26: output bit[10] = 0 (true=0) OK
+  t= 27: output bit[11] = 0 (true=0) OK
+  t= 28: output bit[12] = 0 (true=0) OK
+  t= 29: output bit[13] = 0 (true=0) OK
+  t= 30: output bit[14] = 1 (true=1) OK
+  t= 31: output bit[15] = 0 (true=0) OK
+  t= 32: output bit[16] = 1 (true=1) OK
+  t= 33: output bit[17] = 1 (true=1) OK
+  t= 34: output bit[18] = 1 (true=1) OK
+  t= 35: output bit[19] = 0 (true=0) OK
+
+----------------------------------------------------------------------
+  End-of-frame traceback (last 15 symbols)
+----------------------------------------------------------------------
+  final traceback: bit[99] = 0 (true=0) OK
+  final traceback: bit[98] = 1 (true=1) OK
+  final traceback: bit[97] = 1 (true=1) OK
+  final traceback: bit[96] = 1 (true=1) OK
+  final traceback: bit[95] = 1 (true=1) OK
+  final traceback: bit[94] = 1 (true=1) OK
+  final traceback: bit[93] = 1 (true=1) OK
+  final traceback: bit[92] = 1 (true=1) OK
+  final traceback: bit[91] = 1 (true=1) OK
+  final traceback: bit[90] = 1 (true=1) OK
+  final traceback: bit[89] = 1 (true=1) OK
+  final traceback: bit[88] = 1 (true=1) OK
+  final traceback: bit[87] = 0 (true=0) OK
+  final traceback: bit[86] = 1 (true=1) OK
+  final traceback: bit[85] = 0 (true=0) OK
+
+======================================================================
+  Summary
+======================================================================
+  Total symbols: 100
+  Valid output symbols: 100
+  Errors: 0
+  BER: 0.0000
+  System latency: 15 symbol periods
+
+  Key insight:
+  The receiver outputs bit[t] at time t+15+L-2,
+  allowing real-time streaming without waiting for end-of-frame.
