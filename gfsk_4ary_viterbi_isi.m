@@ -5,14 +5,14 @@ function gfsk_4ary_viterbi_isi()
 % Architecture:
 %   1. Tx: continuous-phase GFSK, gaussdesign(BT,span,sps) Gaussian pulse shaping
 %   2. Channel: AWGN + 80dB out-of-band rejection channel filter
-%   3. Receiver frontend：4-branch tone-mixer coherent detection + Chebyshev window LPF
-%   4. Receiver backend：4-state ISI-aware Viterbi sequence detection
+%   3. Receiver frontend: 4-branch tone-mixer coherent detection + Chebyshev window LPF
+%   4. Receiver backend: 4-state ISI-aware Viterbi sequence detection
 %
 % ISI-aware design:
 %   - Precompute 16 standard noiseless GFSK waveforms for (prev_gray, curr_gray) combinations
 %   - Measure 4-branch tone-mixer output at current symbol midpoint as reference template
 %   - Normalize reference templates, Viterbi branch metric = inner product of observation and reference (cosine similarity)
-%   - State = current symbol; transition prev→curr branch metric based on ISI reference template
+%   - State = current symbol; transition prev->curr branch metric based on ISI reference template
 %   - Normalization prevents overflow, full-frame traceback
 
 %% ========================================================================
@@ -25,7 +25,7 @@ M       = 4;            % 4-ary
 k       = log2(M);      % 2 bits/symbol
 h       = 1.0;          % Modulation index: adjacent tone spacing = h*Rs = 1000 Hz
 BT      = 0.5;          % Gaussian filter BT
-span    = 4;            % Gaussian filter span（Symbol count）
+span    = 4;            % Gaussian filter span (Symbol count)
 Nsym    = 10000;        % ValidSymbol count
 
 EbN0_dB = 12*log10(1:1.9:20)/log10(20);  % Nonlinear EbN0 distribution: 0~12dB
@@ -90,7 +90,7 @@ for i = 0:3
 end
 for i = 0:3
     if gry2nat(gray_enc(i+1)+1) ~= i
-        error('Gray 映射不一致！');
+        error('Gray mapping inconsistent!');
     end
 end
 
@@ -138,7 +138,7 @@ tone_freq = freq_no * h * Rs / 2;
 % 5. Precompute: ISI reference templates (prev_gray, curr_gray) 4-branch metrics
 % ========================================================================
 fprintf('--- Pre-computing ISI reference templates (with ch_filter) ---\n');
-N_guard = 12;  % Guard bandSymbol count（> filter settle time）
+N_guard = 12;  % Guard bandSymbol count (greater than filter settle time)
 ref_metric = zeros(M, M, M);  % (prev_gray, curr_gray, branch_idx)
 
 for prev_g = 0:3
@@ -150,7 +150,7 @@ for prev_g = 0:3
         s_ch = filter(ch_coeffs, 1, s);  % Consistent with main simulation: through ch_filter
         
         k_curr = N_guard + 2;
-        % Sampling point andMain simulationFullyConsistent：Include total_delay
+        % Sampling point andMain simulationFullyConsistent: Include total_delay
         idx_curr = (k_curr - 1) * nsps + nsps/2 + total_delay;
         
         bm = measure_tonemixer(s_ch, idx_curr);
@@ -176,64 +176,62 @@ fprintf('\n');
     function det_gray = viterbi_decode_isi(obs_matrix)
         [M_v, T] = size(obs_matrix);
         
-        pm = zeros(M_v, T);
+        pm   = zeros(M_v, T);
         back = zeros(M_v, T);
         
-        % t=1: initialize using prev=0 (preamble) ISI reference
-        for s = 1:M_v
-            curr_g = s-1;
-            prev_g = 0;  % preamble is symbol 0
-            ref = squeeze(ref_metric(prev_g+1, curr_g+1, :));
-            obs = obs_matrix(:, 1);
-            
-            n_obs = norm(obs);
-            n_ref = norm(ref);
-            if n_obs > 1e-6 && n_ref > 1e-6
-                obs_n = obs / n_obs;
-                ref_n = ref / n_ref;
-                branch = obs_n' * ref_n;
-            else
-                branch = 0;
-            end
-            
-            pm(s, 1) = branch;
-        end
-        
-        % t=2:T: forward recursion with ISI-aware transitions
-        for t = 2:T
-            for s = 1:M_v  % current state = curr
-                best_val = -inf;
-                best_prev = 1;
-                for prev = 1:M_v
-                    prev_g = prev-1;
-                    curr_g = s-1;
-                    ref = squeeze(ref_metric(prev_g+1, curr_g+1, :));
-                    obs = obs_matrix(:, t);
-                    
-                    n_obs = norm(obs);
-                    n_ref = norm(ref);
-                    if n_obs > 1e-6 && n_ref > 1e-6
-                        obs_n = obs / n_obs;
-                        ref_n = ref / n_ref;
-                        branch = obs_n' * ref_n;  % cosine similarity [0,1]
-                    else
-                        branch = 0;
-                    end
-                    
-                    val = pm(prev, t-1) + branch;
-                    if val > best_val
-                        best_val = val;
-                        best_prev = prev;
-                    end
+        %% =====================================================================
+        % Vectorized precomputation: normalized reference templates
+        %% =====================================================================
+        % ref_metric is (prev_g, curr_g, branch_idx) = M_v x M_v x M_v
+        % Compute L2 norm of each reference vector over the branch dimension
+        ref_norms = squeeze(sqrt(sum(ref_metric.^2, 3)));  % M_v x M_v
+        ref_normed = zeros(size(ref_metric));
+        for p = 1:M_v
+            for c = 1:M_v
+                if ref_norms(p,c) > 1e-6
+                    ref_normed(p,c,:) = ref_metric(p,c,:) / ref_norms(p,c);
                 end
-                pm(s, t) = best_val;
-                back(s, t) = best_prev;
             end
-            % Normalize to prevent overflow
-            pm(:, t) = pm(:, t) - max(pm(:, t));
+        end
+        % Flatten to M_v x (M_v*M_v) for matrix multiplication
+        ref_all = reshape(ref_normed, M_v, M_v * M_v);
+        
+        %% =====================================================================
+        % Vectorized precomputation: normalized observation vectors
+        %% =====================================================================
+        obs_norms = vecnorm(obs_matrix, 2, 1);           % 1 x T
+        obs_normed = obs_matrix ./ obs_norms;            % broadcast normalization
+        obs_normed(:, obs_norms < 1e-6) = 0;             % handle zero-norm vectors
+        
+        %% =====================================================================
+        % t=1: initialize (prev=0, i.e., prev_g=0, prev_idx=1)
+        %% =====================================================================
+        pm(:, 1) = (obs_normed(:, 1)' * ref_all(:, 1:M_v:M_v*M_v)).';
+        
+        %% =====================================================================
+        % t=2:T: fully vectorized forward recursion
+        % For each t, compute all M_v x M_v branch metrics in one matrix product
+        %% =====================================================================
+        for t = 2:T
+            % obs_normed(:,t)' (1 x M_v) * ref_all (M_v x M_v^2) -> 1 x M_v^2
+            % reshape to M_v x M_v: rows=prev, cols=curr
+            branch_all = reshape(obs_normed(:, t)' * ref_all, M_v, M_v);
+            
+            % val(prev, curr) = pm(prev, t-1) + branch(prev, curr)
+            % pm(:,t-1) is M_v x 1, auto-broadcast to each column of M_v x M_v
+            val = pm(:, t-1) + branch_all;
+            
+            % max over rows (prev) for each column (curr)
+            [pm_t, back_t] = max(val, [], 1);   % 1 x M_v
+            
+            pm(:, t)   = pm_t.';                 % M_v x 1
+            back(:, t) = back_t.';               % M_v x 1
+            pm(:, t)   = pm(:, t) - max(pm(:, t));  % prevent overflow
         end
         
-        % Traceback
+        %% =====================================================================
+        % Traceback (sequential dependency, loop retained)
+        %% =====================================================================
         det_gray = zeros(T, 1);
         [~, det_gray(end)] = max(pm(:, end));
         for t = T-1:-1:1
@@ -300,7 +298,7 @@ for idx = 1:length(EbN0_dB)
     for sim = 1:Nsim
         rng(idx*100 + sim);
         
-        % GenerateRandomSymbol（Preamble/PostambleFixedAs0，WithReference templateConsistent）
+        % GenerateRandomSymbol (Preamble/PostambleFixedAs0, WithReference templateConsistent)
         sym_tx = [zeros(N_pre, 1); randi([0, M-1], Nsym, 1); zeros(N_post, 1)];
         s = generate_gfsk(sym_tx);
         
@@ -314,10 +312,10 @@ for idx = 1:length(EbN0_dB)
         noise = sqrt(noise_var/2) * (randn(Ns_total, 1) + 1j*randn(Ns_total, 1));
         r_ch = filter(ch_coeffs, 1, s + noise);
         
-        % AcquireSoft decisionBranch metric（Full-frame）
+        % AcquireSoft decisionBranch metric (Full-frame)
         branch_metric = measure_tonemixer(r_ch, sample_idx);
         
-        % ---- Hard decision：Per-symbol maximum magnitude ----
+        % ---- Hard decision: Per-symbol maximum magnitude ----
         [~, det_gray_hard] = max(branch_metric, [], 1);
         det_gray_hard = det_gray_hard(:) - 1;
         det_sym_hard = gry2nat(det_gray_hard + 1);
