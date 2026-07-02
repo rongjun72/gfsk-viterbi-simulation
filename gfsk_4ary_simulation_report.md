@@ -342,6 +342,66 @@ ISI 感知 Viterbi：`best_prev = argmax_prev (γ[prev,t-1] + λ(prev→curr,t))
 
 从最后一个时刻的最优状态开始，沿 `survivor` 指针反向追溯，得到全局最优序列。这是 Viterbi 算法的核心——动态规划避免了穷举所有 $M^{N_{sym}}$ 种序列，复杂度从指数降到 $O(N_{sym} \cdot M^2)$。
 
+#### 2.7 前向递归的向量化优化（Matrix-Vector Acceleration）
+
+原始实现的三重嵌套 `for` 循环（`t` → `curr` → `prev`）虽然对于 $M=4$ 的状态数开销不大，但 MATLAB 的循环 interpreter 开销在 $T=10000$ 时会累积。通过 **预计算归一化参考模板 + 矩阵广播** 可将前向递归完全向量化，显著提升处理速度。
+
+##### 优化思路
+
+| 原始操作 | 问题 | 优化方向 |
+|----------|------|---------|
+| `squeeze(ref_metric(...))` | 每次循环切片 3D 数组 | 预展平为 `M × (M²)` 矩阵 |
+| `norm(obs)` / `norm(ref)` | 逐循环重复计算 | `vecnorm` 一次性归一化 |
+| `obs_n' * ref_n` | 逐点内积 | 一次 `1×M * M×M²` BLAS 乘法 |
+| `if val > best_val` | 逐 state 比较 | `max(..., [], 1)` 向量化 |
+
+##### 优化后实现
+
+```matlab
+% --- 预计算：归一化参考模板 (M × M × M -> M × M²) ---
+ref_norms = squeeze(sqrt(sum(ref_metric.^2, 3)));  % M × M
+ref_normed = zeros(size(ref_metric));
+for p = 1:M_v, for c = 1:M_v
+    if ref_norms(p,c) > 1e-6
+        ref_normed(p,c,:) = ref_metric(p,c,:) / ref_norms(p,c);
+    end
+end
+ref_all = reshape(ref_normed, M_v, M_v * M_v);  % M × M²
+
+% --- 预计算：归一化观测向量 (M × T) ---
+obs_norms = vecnorm(obs_matrix, 2, 1);        % 1 × T
+obs_normed = obs_matrix ./ obs_norms;          % 广播归一化
+obs_normed(:, obs_norms < 1e-6) = 0;           % 保护零向量
+
+% --- t=1: 初始化 ---
+pm(:, 1) = (obs_normed(:, 1)' * ref_all(:, 1:M_v:M_v*M_v)).';
+
+% --- t=2:T: 完全向量化的前向递归 ---
+for t = 2:T
+    % 1×M * M×M² -> 1×M², reshape 为 M×M（rows=prev, cols=curr）
+    branch_all = reshape(obs_normed(:, t)' * ref_all, M_v, M_v);
+
+    % pm(:,t-1) (M×1) 自动广播到 M×M 的每一列
+    val = pm(:, t-1) + branch_all;
+
+    [pm_t, back_t] = max(val, [], 1);  % 对 prev 取最大，得到 1×M
+
+    pm(:, t)   = pm_t.';
+    back(:, t) = back_t.';
+    pm(:, t)   = pm(:, t) - max(pm(:, t));  % 防溢出
+end
+```
+
+##### 性能预期
+
+| 操作 | 原始循环 | 向量化 | 预期加速 |
+|------|---------|--------|---------|
+| 单次 t 的 branch 计算 | 16 次 `squeeze` + `norm` + 内积 | 1 次 `1×4 * 4×16` BLAS | **~5–10×** |
+| 归一化 | 逐循环计算 | 预计算 `vecnorm` + 广播 | 零运行时开销 |
+| survivor 选择 | 逐 state `if` 比较 | `max(..., [], 1)` | 向量化 SIMD |
+
+> **说明**：回溯（traceback）阶段由于序列依赖无法向量化，保留原循环。对于 $M=4$ 的小状态数，主要收益来自消除 MATLAB 的循环 interpreter overhead。如果 $T$ 更大或嵌套在外层 EbN0 扫描中，收益更显著。
+
 ---
 
 ## 6. 关键调试历程
