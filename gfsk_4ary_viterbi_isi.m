@@ -193,8 +193,9 @@ fprintf('\n');
                 end
             end
         end
-        % Flatten to M_v x (M_v*M_v) for matrix multiplication
-        ref_all = reshape(ref_normed, M_v, M_v * M_v);
+        % Flatten to branch x (M_v*M_v) for matrix multiplication
+        % After permute: dimension = (branch, prev, curr)
+        ref_all = reshape(permute(ref_normed, [3, 1, 2]), M_v, []);
         
         %% =====================================================================
         % Vectorized precomputation: normalized observation vectors
