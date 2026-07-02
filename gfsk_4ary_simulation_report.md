@@ -358,7 +358,7 @@ ISI 感知 Viterbi：`best_prev = argmax_prev (γ[prev,t-1] + λ(prev→curr,t))
 ##### 优化后实现
 
 ```matlab
-% --- 预计算：归一化参考模板 (M × M × M -> M × M²) ---
+% --- 预计算：归一化参考模板 (M × M × M -> branch × (M²)) ---
 ref_norms = squeeze(sqrt(sum(ref_metric.^2, 3)));  % M × M
 ref_normed = zeros(size(ref_metric));
 for p = 1:M_v, for c = 1:M_v
@@ -366,7 +366,7 @@ for p = 1:M_v, for c = 1:M_v
         ref_normed(p,c,:) = ref_metric(p,c,:) / ref_norms(p,c);
     end
 end
-ref_all = reshape(ref_normed, M_v, M_v * M_v);  % M × M²
+ref_all = reshape(permute(ref_normed, [3, 1, 2]), M_v, []);  % branch x (prev*curr), after permute: (branch, prev, curr)
 
 % --- 预计算：归一化观测向量 (M × T) ---
 obs_norms = vecnorm(obs_matrix, 2, 1);        % 1 × T
@@ -399,6 +399,8 @@ end
 | 单次 t 的 branch 计算 | 16 次 `squeeze` + `norm` + 内积 | 1 次 `1×4 * 4×16` BLAS | **~5–10×** |
 | 归一化 | 逐循环计算 | 预计算 `vecnorm` + 广播 | 零运行时开销 |
 | survivor 选择 | 逐 state `if` 比较 | `max(..., [], 1)` | 向量化 SIMD |
+
+> **关键陷阱**：`ref_metric` 的维度是 `(prev, curr, branch)`。如果直接用 `reshape(ref_normed, 4, 16)`，MATLAB 列优先展平后每一列变成 `(curr, branch)` 的混合，导致矩阵乘法结果不是单个 `(prev, curr)` 的 cosine similarity，而是跨 prev 的加权和。**必须先 `permute(ref_normed, [3, 1, 2])` 把 branch 提到第1维，再 reshape**，使每一列成为完整的 4-branch 参考向量。
 
 > **说明**：回溯（traceback）阶段由于序列依赖无法向量化，保留原循环。对于 $M=4$ 的小状态数，主要收益来自消除 MATLAB 的循环 interpreter overhead。如果 $T$ 更大或嵌套在外层 EbN0 扫描中，收益更显著。
 
@@ -450,6 +452,17 @@ s_ch = filter(ch_coeffs, 1, s);  % 与主仿真一致
 **优化后**：$F_p = 2.0$ kHz，$F_{stop} = 2.8$ kHz
 
 **理由**：4GFSK 信号最外侧 tone 在 1500 Hz，高斯脉冲 3dB 带宽 500 Hz，信号能量主要集中在 ±(1500+500) = ±2000 Hz。降低通带宽度减少约 20% 噪声通过。
+
+### 6.6 Bug 5：向量化 Viterbi 维度排列错误（BER≈0.75）
+
+**症状**：无噪声下 Viterbi BER 高达 0.745，输出始终为全 0，所有 EbN0 下 BER≈0.5。
+
+**原因**：`ref_metric` 的维度是 `(prev, curr, branch)`。直接 `reshape(ref_normed, 4, 16)` 按 MATLAB 列优先展平后，每一列变成了 `(curr, branch)` 的混合，而非完整的 4-branch 参考向量。`obs_normed' * ref_all` 计算的是跨 prev 的加权和，不是单个 `(prev, curr)` 的 cosine similarity。
+
+**修复**：先用 `permute(ref_normed, [3, 1, 2])` 把 `branch` 提到第1维，再 reshape，使每一列成为完整的 `branch` 向量：
+```matlab
+ref_all = reshape(permute(ref_normed, [3, 1, 2]), M_v, []);
+```
 
 ---
 
